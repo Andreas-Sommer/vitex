@@ -186,6 +186,23 @@ class Vitex {
     console.log("✅ Cleaned manifest.json written.");
   }
 
+  _resolveStaticTargets() {
+    return this.staticCopyTargets.map(target => {
+      let resolvedSrc = target.src;
+
+      this.aliases.forEach(alias => {
+        if (resolvedSrc.startsWith(alias.find)) {
+          resolvedSrc = resolvedSrc.replace(alias.find, alias.replacement);
+        }
+      });
+
+      return {
+        src: path.resolve(process.cwd(), resolvedSrc), // <-- statt this.currentDir
+        dest: target.dest
+      };
+    });
+  }
+
   /**
    * Generates a Vite configuration object.
    * @returns {object} Vite configuration.
@@ -198,13 +215,6 @@ class Vitex {
         this._saveCleanedManifest();
       }
     };
-
-    const viteStaticCopyPlugin = viteStaticCopy({
-      targets: this.staticCopyTargets.map(target => ({
-        src: resolve(this.currentDir, target.src),
-        dest: target.dest
-      }))
-    });
 
     const entryPoints = {};
     this.viteEntrypoints.forEach(entryPath => {
@@ -235,7 +245,9 @@ class Vitex {
       },
       plugins: [
         typo3({ debug: true }),
-        viteStaticCopyPlugin,
+        viteStaticCopy({
+          targets: this._resolveStaticTargets()
+        }),
         autoOrigin(),
         ...this.extraPlugins,
         postBuildManifestCleanupPlugin
@@ -243,7 +255,7 @@ class Vitex {
       resolve: {
         alias: this.aliases.map(alias => ({
           find: alias.find,
-          replacement: resolve(this.currentDir, alias.replacement)
+          replacement: path.resolve(alias.replacement)
         }))
       }
     });
