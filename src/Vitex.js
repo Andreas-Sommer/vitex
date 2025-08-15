@@ -208,10 +208,24 @@ class Vitex {
    * @returns {object} Vite configuration.
    */
   getViteConfig() {
+    // Optional tiny plugin: re-escape PUA glyphs in final CSS assets (belt & suspenders)
+    const escapeUnicodeInCssPlugin = {
+      name: 'escape-unicode-in-css',
+      enforce: 'post',
+      generateBundle(_options, bundle) {
+        for (const [fileName, chunk] of Object.entries(bundle)) {
+          if (chunk.type === 'asset' && fileName.endsWith('.css')) {
+            const src = String(chunk.source);
+            chunk.source = src.replace(/[\uE000-\uF8FF]/g, ch => '\\' + ch.codePointAt(0).toString(16));
+          }
+        }
+      }
+    };
+
     // After build, clean the manifest.json
     const postBuildManifestCleanupPlugin = {
       name: 'postbuild-manifest-cleanup',
-      closeBundle: () => {
+      generateBundle: (outputOptions, bundle) => {
         this._saveCleanedManifest();
       }
     };
@@ -238,19 +252,27 @@ class Vitex {
           input: entryPoints
         },
         outDir: resolve(this.outputPath),
+
+        // IMPORTANT: disable Lightning CSS minifier; use esbuild -> keeps \f101 escapes
+        cssMinify: 'esbuild',
       },
-      css: { devSourcemap: true },
+      css: {
+        devSourcemap: true,
+        // make sure your postcss.config.cjs is used (even when called via class)
+        postcss: './postcss.config.cjs',
+      },
       server: {
         ...this.serverOptions
       },
       plugins: [
-        typo3({ debug: true }),
+        typo3({debug: true}),
         viteStaticCopy({
           targets: this._resolveStaticTargets()
         }),
         autoOrigin(),
         ...this.extraPlugins,
-        postBuildManifestCleanupPlugin
+        postBuildManifestCleanupPlugin,
+        escapeUnicodeInCssPlugin // <- add last
       ],
       resolve: {
         alias: this.aliases.map(alias => ({
