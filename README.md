@@ -24,6 +24,16 @@ Vitex is designed to simplify the build setup for TYPO3-based projects using Vit
 - No build step required – raw JS usable directly in dev setup
 - Fully compatible with Vite + TYPO3 + SCSS/JS workflows
 
+**New in v1.1.0**
+- Optional **Root Build support**: discover entry points in a project-level `Build/Frontend` folder
+    - Default patterns (configurable):
+        - `Styles/*.scss`, `JavaScript/*.js` (top-level only)
+        - `Styles/*/*.scss`, `JavaScript/*/*.js` (one sitename folder level)
+- Sitename-aware output for Root Build (`<sitename>_File.css`; fallback `global_*`)
+- PostCSS auto-pickup and CSS minification via `esbuild` (keeps icon-font PUA glyphs intact)
+- Improved alias resolution and `staticCopyTargets` handling
+- Post-build manifest normalization retained
+
 ## 📦 Installation
 
 If used locally:
@@ -43,19 +53,80 @@ npm install @belsignum/vitex
 import Vitex from 'vitex';
 
 const vite = new Vitex({
-  sitenames: ['mysite', 'other-site'],
-  outputPath: 'public/assets/',
-  packagesPath: 'packages/sitepackage',
-  aliases: [
-    { find: '@sitepackage', replacement: 'packages/sitepackage' }
-  ],
-  staticCopyTargets: [
-    { src: 'node_modules/bootstrap-icons/*', dest: 'bootstrap-icons' }
-  ],
-  server: {
-    allowedHosts: ['vite.ddev.site']
-  }
+    sitenames: ['mysite', 'other-site'],
+    outputPath: 'public/assets/',
+    packagesPath: 'packages/sitepackage',
+    aliases: [
+        { find: '@sitepackage', replacement: 'packages/sitepackage' }
+    ],
+    staticCopyTargets: [
+        { src: 'node_modules/bootstrap-icons/*', dest: 'bootstrap-icons' }
+    ],
+    server: {
+        allowedHosts: ['vite.ddev.site']
+    },
+
+    // New in v1.1.0:
+    rootBuild: {
+        enabled: true,               // enable discovery in Build/Frontend
+        path: 'Build/Frontend',
+        patterns: [
+            'Styles/*.scss',
+            'JavaScript/*.js',
+            'Styles/*/*.scss',
+            'JavaScript/*/*.js'
+        ],
+        // treat underscore-prefixed files as partials/components
+        ignoreUnderscore: true
+    }
 });
 
 export default vite.getViteConfig();
 ```
+
+## Scripts
+
+Add npm scripts to your `package.json`:
+
+```json
+"scripts": {
+"dev": "vite --host 0.0.0.0",
+"build": "vite build",
+"watch": "vite build --watch",
+"preview": "vite preview"
+}
+```
+
+## ⚙️ Configuration Options
+
+Vitex accepts the following options when creating a new instance:
+
+| Option              | Type       | Default              | Description |
+|---------------------|------------|----------------------|-------------|
+| **sitenames**       | `string[]` | `[]`                 | List of TYPO3 site identifiers used for namespacing output files. |
+| **outputPath**      | `string`   | `public/assets/`     | Path where compiled assets will be written. |
+| **packagesPath**    | `string`   | `packages/sitepackage` | Path to your sitepackage or TYPO3 package containing frontend sources. |
+| **aliases**         | `array`    | `[]`                 | Custom alias definitions passed directly to Vite (`{ find, replacement }`). |
+| **staticCopyTargets** | `array`  | `[]`                 | Copy patterns for static assets (uses [vite-plugin-static-copy](https://github.com/sapphi-red/vite-plugin-static-copy)). |
+| **server**          | `object`   | `{}`                 | Extra Vite dev server configuration, e.g. `allowedHosts`. |
+| **rootBuild**       | `object`   | `{ enabled: false }` | Enables discovery of entrypoints from a global `Build/Frontend` folder. |
+| └─ `enabled`        | `boolean`  | `false`              | Whether root-level build discovery is active. |
+| └─ `path`           | `string`   | `"Build/Frontend"`   | Folder scanned for global entrypoints. |
+| └─ `patterns`       | `string[]` | see below            | Glob patterns used to discover SCSS/JS entrypoints.<br>Default: `['Styles/*.scss','JavaScript/*.js','Styles/*/*.scss','JavaScript/*/*.js']`. |
+| └─ `ignoreUnderscore` | `boolean` | `true`              | Treat underscore-prefixed files (`_partial.scss`) as partials and ignore them. |
+
+## Changelog
+
+### v1.1.0
+- Added support for **Root Build** (e.g. project-level `Build/Frontend`)
+- Improved configuration and documentation
+- PostCSS auto-pickup and CSS minification via `esbuild` (keeps icon-font PUA glyphs intact)
+
+### v1.0.3
+- Initial public release
+
+---
+
+## License
+
+[MIT License](https://opensource.org/licenses/MIT)

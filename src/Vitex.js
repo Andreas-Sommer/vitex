@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import path, { basename, dirname, resolve } from "node:path";
-import { defineConfig } from "vite";
-import { fileURLToPath } from "node:url";
+import path, {basename, dirname, resolve} from "node:path";
+import {defineConfig} from "vite";
 import autoOrigin from "vite-plugin-auto-origin";
 import typo3 from "vite-plugin-typo3";
-import { viteStaticCopy } from "vite-plugin-static-copy";
+import {viteStaticCopy} from "vite-plugin-static-copy";
 
 /**
  * Vitex
@@ -12,14 +11,19 @@ import { viteStaticCopy } from "vite-plugin-static-copy";
  * A configurable Vite configuration class optimized for modular frontend setups such as TYPO3 extensions.
  *
  * Features:
- * - Reads `ViteEntrypoints.json` from package Configuration folders
- * - Resolves wildcard-based SCSS/JS entrypoints
- * - Generates namespace-based entry names (e.g. `mysite_default`, `global_main`)
- * - Cleans up the Vite manifest after build:
- *   - Removes self-imports
- *   - Removes `name` for static assets (e.g. fonts/images)
- *   - Applies namespaced `name` values only to SCSS and JS
- * - Supports dynamic aliases, plugin extension, static copy targets, and Vite dev server options
+ *  - Collects Vite entrypoints from `ViteEntrypoints.json` files in TYPO3 extensions.
+ *  - Optionally collects additional entrypoints from a configurable root build folder
+ *    (e.g. "Build/Frontend"), independent of extensions.
+ *    - Supports site-specific naming via `options.sitenames` (prefix `<site>_...`).
+ *    - Files without a matching sitename in their path are prefixed with `global_...`.
+ *    - By default only matches top-level files:
+ *         Styles/*.scss, JavaScript/*.js
+ *         Styles/<sitename>/*.scss, JavaScript/<sitename>/*.js
+ *    - Ignores deeper subdirectories (no `**` recursion).
+ *    - Optionally ignores files starting with `_` (e.g. SCSS partials) if
+ *      `rootBuild.ignoreUnderscore` is set to `true`.
+ *
+ * The resulting entrypoints are merged and returned as a complete Vite configuration.
  *
  * Constructor Options:
  * @param {Object} options - Configuration object
@@ -48,22 +52,50 @@ class Vitex {
     this.validSitenames = options.sitenames || [];
     this.outputPath = options.outputPath || "public/assets/";
     this.packagesPath = options.packagesPath || "packages";
-    this.currentDir = dirname(fileURLToPath(import.meta.url));
     this.aliases = options.aliases || [];
     this.extraPlugins = options.plugins || [];
     this.staticCopyTargets = options.staticCopyTargets || [];
+    // ── Root-Build: flexible folder structure inside a base path ──────────────
+    // Minimal-invasive with reasonable defaults. Only top-level files (no deep subfolders).
+    const rb = options.rootBuild || {};
+    this.rootBuildEnabled = rb.enabled ?? true;
+    this.rootBuildPath = rb.path ?? "Build/Frontend";
+    // Defaults: only top-level files in Styles/ and JavaScript/
+    // plus one additional level for site-specific folders
+    // (Styles/<sitename>/*.scss, JavaScript/<sitename>/*.js)
+    this.rootBuildPatterns = Array.isArray(rb.patterns) && rb.patterns.length > 0 ? rb.patterns
+      : ["Styles/*.scss", "JavaScript/*.js", "Styles/*/*.scss", "JavaScript/*/*.js"];
+    // Optional: ignore files starting with "_" (e.g. SCSS partials)
+    this.rootBuildIgnoreUnderscore = rb.ignoreUnderscore === true;
+    // Map absolute file path → site name (used for naming <site>_*)
+    this._siteHints = new Map();
     this.serverOptions = options.server || {};
     this.viteEntrypoints = this._generateEntrypoints();
   }
 
   /**
    * Search for all `ViteEntrypoints.json` files in `Configuration/` of all packages.
+   * Returns an empty array if the packagesPath does not exist or cannot be read.
    * @returns {string[]} Array of file paths.
    */
   _findViteEntrypointsFiles() {
-    return fs.readdirSync(this.packagesPath)
+    // Ensure the base path exists
+    if (!fs.existsSync(this.packagesPath)) {
+      console.warn(`ℹ️ packagesPath not found: ${this.packagesPath}`);
+      return [];
+    }
+
+    let entries;
+    try {
+      entries = fs.readdirSync(this.packagesPath);
+    } catch (e) {
+      console.warn(`ℹ️ Unable to read packagesPath: ${this.packagesPath}`, e);
+      return [];
+    }
+
+    return entries
       .map(pkg => resolve(this.packagesPath, pkg, "Configuration", "ViteEntrypoints.json"))
-      .filter(fs.existsSync); // Return only existing files
+      .filter(fs.existsSync);
   }
 
   /**
@@ -73,33 +105,104 @@ class Vitex {
    * @returns {string[]} Array of resolved file paths.
    */
   _expandEntryPaths(baseDir, relativePath) {
+    // Only support simple one-level globs:
+    // - "Dir/*.ext"   (files directly in Dir)
+    // - "Dir/*/*.ext" (files one level below Dir)
+    // No support for "**" recursion.
+
+    // No wildcard at all → return the resolved path
     if (!relativePath.includes("*")) {
       return [resolve(baseDir, relativePath)];
     }
-    // Extract directory and pattern
-    const dirPart = dirname(relativePath);
-    const globPart = basename(relativePath);
-    const regex = new RegExp("^" + globPart.replace("*", ".*") + "$");
-    const absoluteDir = resolve(baseDir, dirPart);
 
-    const matchedFiles = fs.readdirSync(absoluteDir)
-      .filter(file => regex.test(file))
-      .map(file => resolve(absoluteDir, file));
+    const dirPart = dirname(relativePath);     // e.g. "Styles" or "Styles/*"
+    const globPart = basename(relativePath);   // e.g. "*.scss"
 
-    if (matchedFiles.length === 0) {
+    const fileRegex = new RegExp("^" + globPart
+      .replace(/\./g, "\\.")
+      .replace(/\*/g, ".*") + "$");
+
+    // Case A: simple "Dir/*.ext"
+    if (!dirPart.includes("*")) {
+      const absoluteDir = resolve(baseDir, dirPart);
+      if (!fs.existsSync(absoluteDir)) {
+        console.warn(`⚠️ Warning: Directory not found for pattern ${relativePath}`);
+        return [];
+      }
+      let matched = fs.readdirSync(absoluteDir, { withFileTypes: true })
+        .filter(e => e.isFile() && fileRegex.test(e.name))
+        .map(e => resolve(absoluteDir, e.name));
+      if (this.rootBuildIgnoreUnderscore) {
+        matched = matched.filter(p => !basename(p).startsWith("_"));
+      }
+      if (matched.length === 0) {
+        console.warn(`⚠️ Warning: No files found for pattern ${relativePath}`);
+      }
+      return matched;
+    }
+
+    // Case B: one-level wildcard in directory, e.g. "Styles/*/*.scss"
+    // Only support a single "/*" at the end of dirPart
+    const starIdx = dirPart.indexOf("/*");
+    const parentDir = resolve(baseDir, dirPart.slice(0, starIdx)); // "Styles"
+    if (!fs.existsSync(parentDir)) {
+      console.warn(`⚠️ Warning: Directory not found for pattern ${relativePath}`);
+      return [];
+    }
+
+    // Iterate immediate subdirectories
+    const subdirs = fs.readdirSync(parentDir, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => resolve(parentDir, e.name));
+
+    let files = [];
+    for (const sub of subdirs) {
+      let matched = fs.readdirSync(sub, { withFileTypes: true })
+        .filter(e => e.isFile() && fileRegex.test(e.name))
+        .map(e => resolve(sub, e.name));
+      if (this.rootBuildIgnoreUnderscore) {
+        matched = matched.filter(p => !basename(p).startsWith("_"));
+      }
+      files.push(...matched);
+    }
+
+    if (files.length === 0) {
+      // Directory exists, but no matches across all subdirs
       console.warn(`⚠️ Warning: No files found for pattern ${relativePath}`);
     }
 
-    return matchedFiles;
+    return files;
   }
 
   /**
-   * Reads `ViteEntrypoints.json` and converts relative paths to absolute ones.
-   * @returns {string[]} List of absolute paths.
+   * Root-Build entrypoints: expands patterns inside this.rootBuildPath.
+   * Automatically detects the site if any path segment matches one of options.sitenames.
+   * Later combined with package entrypoints (ViteEntrypoints.json).
    */
-  _generateEntrypoints() {
-    const viteEntrypointFiles = this._findViteEntrypointsFiles();
+  _generateRootEntrypoints() {
+    if (!this.rootBuildEnabled) return [];
+    const baseDir = resolve(process.cwd(), this.rootBuildPath);
+    if (!fs.existsSync(baseDir)) return [];
+    const files = [];
+    for (const pat of this.rootBuildPatterns) {
+      const found = this._expandEntryPaths(baseDir, pat);
+      for (const f of found) {
+        files.push(f);
+        // Site detection: check if any path segment matches a sitename
+        const parts = f.split(path.sep);
+        const partsLower = parts.map((p) => p.toLowerCase());
+        const sitesLower = this.validSitenames.map((s) => s.toLowerCase());
+        const matchIndex = sitesLower.findIndex((s) => partsLower.includes(s));
+        const site = matchIndex !== -1 ? this.validSitenames[matchIndex] : undefined;
+        if (site) this._siteHints.set(f, site);
+      }
+    }
+    return files;
+  }
 
+
+  _generatePackageEntrypoints() {
+    const viteEntrypointFiles = this._findViteEntrypointsFiles();
     return viteEntrypointFiles.flatMap(file => {
       const baseDir = dirname(file);
       const rawEntrypoints = fs.readFileSync(file, "utf-8");
@@ -107,6 +210,13 @@ class Vitex {
         this._expandEntryPaths(baseDir, relativePath)
       );
     });
+  }
+
+  // Combines root-build and package entrypoints (original behavior preserved)
+  _generateEntrypoints() {
+    const fromRoot = this._generateRootEntrypoints();
+    const fromPackages = this._generatePackageEntrypoints();
+    return [...fromRoot, ...fromPackages];
   }
 
   /**
@@ -117,13 +227,20 @@ class Vitex {
   _generateEntryName(entryPath) {
     if (!entryPath.endsWith(".scss") && !entryPath.endsWith(".js")) return entryPath;
 
-    const fileName = basename(entryPath, path.extname(entryPath)); // "main"
-    const parentFolder = basename(dirname(entryPath)); // "JavaScript" oder "mysite"
+    const fileName = basename(entryPath, path.extname(entryPath)).toLowerCase();
 
-    const isGlobal = !this.validSitenames.includes(parentFolder);
+    // 1) Prefer site hint from root-build detection
+    const hintedSite = this._siteHints.get(entryPath);
+    if (hintedSite) return `${hintedSite}_${fileName}`;
 
-    // Fix: Namen korrekt erzeugen, aber `file` nicht verändern
-    return isGlobal ? `global_${fileName}` : `${parentFolder}_${fileName}`;
+    // 2) Fallback for package entries: case-insensitive folder match
+    const parentFolder = basename(dirname(entryPath));
+    const parentLower = parentFolder.toLowerCase();
+    const sitesLower = this.validSitenames.map((s) => s.toLowerCase());
+    const matchIndex = sitesLower.findIndex((s) => s === parentLower);
+    const isGlobal = matchIndex === -1;
+
+    return isGlobal ? `global_${fileName}` : `${this.validSitenames[matchIndex]}_${fileName}`;
   }
 
   /**
@@ -135,7 +252,7 @@ class Vitex {
   _cleanManifest(manifest) {
     return Object.fromEntries(
       Object.entries(manifest).map(([key, entry]) => {
-        const newEntry = { ...entry };
+        const newEntry = {...entry};
 
         // 🔹 Remove self-referencing imports
         if (newEntry.src && newEntry.imports) {
