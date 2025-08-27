@@ -1,6 +1,6 @@
 {
   "name": "@belsignum/vitex",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "A configurable Vite configuration builder class optimized for modular frontend setups such as TYPO3 extensions.",
   "type": "module",
   "main": "./src/Vitex.js",
