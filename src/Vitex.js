@@ -50,6 +50,16 @@ class Vitex {
   constructor(options = {}) {
     // Define constants
     this.validSitenames = options.sitenames || [];
+    // --- Optimization flags (all optional) -------------------------------
+    // optimize.bundleBootstrap: bundle all Bootstrap modules into a single chunk (default: true)
+    // optimize.stripJsComments: remove JS comments in the output (default: true)
+    // optimize.commentsPolicy:  'none' | 'eof' | 'inline'  (only relevant if esbuild minification is used)
+    //                           default: 'none'  -> also removes license banners like /*! ... */
+    this.optimize = {
+      bundleBootstrap: options.optimize?.bundleBootstrap ?? true,
+      stripJsComments: options.optimize?.stripJsComments ?? true,
+      commentsPolicy: options.optimize?.commentsPolicy ?? 'none'
+    };
     this.outputPath = options.outputPath || "public/assets/";
     this.packagesPath = options.packagesPath || "packages";
     this.aliases = options.aliases || [];
@@ -314,7 +324,7 @@ class Vitex {
       });
 
       return {
-        src: path.resolve(process.cwd(), resolvedSrc), // <-- statt this.currentDir
+        src: path.resolve(process.cwd(), resolvedSrc), // <-- instead of this.currentDir
         dest: target.dest
       };
     });
@@ -349,7 +359,7 @@ class Vitex {
 
     const entryPoints = {};
     this.viteEntrypoints.forEach(entryPath => {
-      // Nur den technischen Basisnamen nehmen → beeinflusst "file"
+      // Use only the technical base name → affects "file"
       const entryName = this._generateEntryName(entryPath);
 
       if (!entryPoints[entryName]) {
@@ -365,13 +375,34 @@ class Vitex {
       build: {
         manifest: true,
         cssCodeSplit: true,
-        rollupOptions: {
-          input: entryPoints
-        },
         outDir: resolve(this.outputPath),
 
-        // IMPORTANT: disable Lightning CSS minifier; use esbuild -> keeps \f101 escapes
-        cssMinify: 'esbuild',
+        // Minify with Terser: also removes all /*! Bootstrap … */ banners
+        minify: 'terser',
+        terserOptions: {
+          compress: true,
+          mangle: true,
+          format: {
+            comments: false // strip all comments completely
+          }
+        },
+
+        rollupOptions: {
+          input: entryPoints,
+          output: {
+            // Combine Bootstrap + Popper -> ONE chunk
+            manualChunks(id) {
+              if (id.includes('node_modules/bootstrap')) return 'bootstrap'
+              if (id.includes('@popperjs/core')) return 'bootstrap'
+            },
+            chunkFileNames: 'assets/[name]-[hash].js',
+            entryFileNames: 'assets/[name]-[hash].js',
+            assetFileNames: 'assets/[name]-[hash][extname]'
+          }
+        },
+
+        // CSS-Minify over esbuild (LightningCSS disabled)
+        cssMinify: 'esbuild'
       },
       css: {
         devSourcemap: true,
