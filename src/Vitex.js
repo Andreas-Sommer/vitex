@@ -235,22 +235,30 @@ class Vitex {
    * @returns {string} Generated name.
    */
   _generateEntryName(entryPath) {
-    if (!entryPath.endsWith(".scss") && !entryPath.endsWith(".js")) return entryPath;
+    const ext = path.extname(entryPath).toLowerCase();
+    if (ext !== ".scss" && ext !== ".js") return entryPath;
 
-    const fileName = basename(entryPath, path.extname(entryPath)).toLowerCase();
+    const fileName = basename(entryPath, ext).toLowerCase();
+    // Suffix basierend auf dem Typ (js oder css)
+    const typeSuffix = ext === ".scss" ? "css" : "js";
 
     // 1) Prefer site hint from root-build detection
     const hintedSite = this._siteHints.get(entryPath);
-    if (hintedSite) return `${hintedSite}_${fileName}`;
+    let sitePrefix = "global";
 
-    // 2) Fallback for package entries: case-insensitive folder match
-    const parentFolder = basename(dirname(entryPath));
-    const parentLower = parentFolder.toLowerCase();
-    const sitesLower = this.validSitenames.map((s) => s.toLowerCase());
-    const matchIndex = sitesLower.findIndex((s) => s === parentLower);
-    const isGlobal = matchIndex === -1;
+    if (hintedSite) {
+      sitePrefix = hintedSite;
+    } else {
+      // 2) Fallback for package entries: case-insensitive folder match
+      const parentFolder = basename(dirname(entryPath)).toLowerCase();
+      const sitesLower = this.validSitenames.map((s) => s.toLowerCase());
+      const matchIndex = sitesLower.findIndex((s) => s === parentFolder);
+      if (matchIndex !== -1) {
+        sitePrefix = this.validSitenames[matchIndex];
+      }
+    }
 
-    return isGlobal ? `global_${fileName}` : `${this.validSitenames[matchIndex]}_${fileName}`;
+    return `${sitePrefix}_${fileName}_${typeSuffix}`;
   }
 
   /**
@@ -281,15 +289,15 @@ class Vitex {
         }
 
         // 🔹 Only update name if src exists
-        if (newEntry.src) {
-          const ext = path.extname(newEntry.src);
+        if (newEntry.src && newEntry.isEntry) {
+          const ext = path.extname(newEntry.src).toLowerCase();
           // 🔹 Only for js and scss
           if (ext === ".js" || ext === ".scss") {
             newEntry.name = this._generateEntryName(newEntry.src);
-          } else {
-            // ❌ Entferne name für Assets
-            delete newEntry.name;
           }
+        } else if (newEntry.src && !newEntry.isEntry) {
+          // ❌ Entferne name für Assets
+          delete newEntry.name;
         }
 
         return [key, newEntry];
