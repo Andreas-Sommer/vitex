@@ -272,9 +272,12 @@ class Vitex {
       Object.entries(manifest).map(([key, entry]) => {
         const newEntry = {...entry};
 
+        // 🔹 Use src or the key (which is often the relative source path in Vite)
+        const effectivePath = newEntry.src || key;
+
         // 🔹 Remove self-referencing imports
-        if (newEntry.src && newEntry.imports) {
-          const normalizedSrc = newEntry.src.replace(/\\/g, "/").replace(/^\.\//, "");
+        if (effectivePath && newEntry.imports) {
+          const normalizedSrc = effectivePath.replace(/\\/g, "/").replace(/^\.\//, "");
 
           newEntry.imports = newEntry.imports.filter(importPath => {
             const normalizedImport = importPath.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -288,15 +291,17 @@ class Vitex {
           });
         }
 
-        // 🔹 Only update name if src exists
-        if (newEntry.src && newEntry.isEntry) {
-          const ext = path.extname(newEntry.src).toLowerCase();
+        // 🔹 Robust name assignment for entry points
+        if (newEntry.isEntry && effectivePath) {
+          const ext = path.extname(effectivePath).toLowerCase();
           // 🔹 Only for js and scss
           if (ext === ".js" || ext === ".scss") {
-            newEntry.name = this._generateEntryName(newEntry.src);
+            // Normalize path to absolute to match against _siteHints (which contains absolute paths)
+            const absolutePath = resolve(process.cwd(), effectivePath);
+            newEntry.name = this._generateEntryName(absolutePath);
           }
         } else if (newEntry.src && !newEntry.isEntry) {
-          // ❌ Entferne name für Assets
+          // ❌ Remove name for assets
           delete newEntry.name;
         }
 
@@ -360,7 +365,7 @@ class Vitex {
     // After build, clean the manifest.json
     const postBuildManifestCleanupPlugin = {
       name: 'postbuild-manifest-cleanup',
-      generateBundle: (outputOptions, bundle) => {
+      closeBundle: () => {
         this._saveCleanedManifest();
       }
     };
