@@ -284,11 +284,25 @@ class Vitex {
 
             const isSame = normalizedImport === normalizedSrc;
             if (isSame) {
-              console.log(`🧹 Removed self-import: ${normalizedImport}`);
+              console.log(`Sweep removed self-import: ${normalizedImport}`);
             }
 
             return !isSame;
           });
+        }
+
+        // 🔹 Correction for SCSS entries with JS wrappers
+        if (newEntry.isEntry && effectivePath.endsWith('.scss')) {
+          if (newEntry.file.endsWith('.js') && newEntry.css && newEntry.css.length > 0) {
+            // We take the first CSS as the primary file
+            const mainCss = newEntry.css[0];
+            newEntry.file = mainCss;
+
+            // Remove the first entry from the CSS array so it's not included twice
+            newEntry.css = newEntry.css.slice(1);
+
+            console.log(`✨ Replaced JS-wrapper with primary CSS for: ${effectivePath}`);
+          }
         }
 
         // 🔹 Robust name assignment for entry points
