@@ -58,7 +58,8 @@ class Vitex {
     this.optimize = {
       bundleBootstrap: options.optimize?.bundleBootstrap ?? true,
       stripJsComments: options.optimize?.stripJsComments ?? true,
-      commentsPolicy: options.optimize?.commentsPolicy ?? 'none'
+      commentsPolicy: options.optimize?.commentsPolicy ?? 'none',
+      assetsInlineLimit: options.optimize?.assetsInlineLimit ?? 4096
     };
     this.outputPath = options.outputPath || "public/assets/";
     this.packagesPath = options.packagesPath || "packages";
@@ -403,7 +404,7 @@ class Vitex {
         manifest: true,
         cssCodeSplit: true,
         outDir: resolve(this.outputPath),
-
+        assetsInlineLimit: this.optimize.assetsInlineLimit,
         // Minify with Terser: also removes all /*! Bootstrap … */ banners
         minify: 'terser',
         terserOptions: {
