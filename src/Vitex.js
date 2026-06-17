@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path, {basename, dirname, resolve} from "node:path";
 import {defineConfig} from "vite";
 import autoOrigin from "vite-plugin-auto-origin";
-import typo3 from "vite-plugin-typo3";
+import {getDefaultAllowedOrigins, getDefaultIgnoreList} from "vite-plugin-typo3";
 import {viteStaticCopy} from "vite-plugin-static-copy";
 
 /**
@@ -358,6 +358,33 @@ class Vitex {
     });
   }
 
+  _resolveServerOptions() {
+    const userWatch = this.serverOptions.watch || {};
+    const userIgnored = userWatch.ignored
+      ? (Array.isArray(userWatch.ignored) ? userWatch.ignored : [userWatch.ignored])
+      : [];
+
+    return {
+      ...this.serverOptions,
+      cors: this.serverOptions.cors ?? {
+        origin: getDefaultAllowedOrigins()
+      },
+      watch: {
+        ...userWatch,
+        ignored: [
+          ...getDefaultIgnoreList(),
+          "**/.Build/**",
+          "**/vendor/**",
+          "**/node_modules/**",
+          "**/.git/**",
+          "**/public/assets/**",
+          "**/public/_assets/**",
+          ...userIgnored
+        ]
+      }
+    };
+  }
+
   /**
    * Generates a Vite configuration object.
    * @returns {object} Vite configuration.
@@ -437,11 +464,9 @@ class Vitex {
         // make sure your postcss.config.cjs is used (even when called via class)
         postcss: './postcss.config.cjs',
       },
-      server: {
-        ...this.serverOptions
-      },
+      publicDir: false,
+      server: this._resolveServerOptions(),
       plugins: [
-        typo3({debug: true}),
         viteStaticCopy({
           targets: this._resolveStaticTargets()
         }),
